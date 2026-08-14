@@ -68,7 +68,7 @@
     canvas {
       display: block;
       cursor: crosshair;
-      touch-action: none; /* Prevents iPad scroll gestures while drawing */
+      touch-action: none; /* Prevents iPad scrolling gestures while drawing */
     }
     #status-overlay {
       position: absolute;
@@ -99,7 +99,7 @@
 
 <header>
   <div class="info-panel">
-    <button class="tool-btn" onclick="document.getElementById('file-input').click()">📂 Upload/Add Charts</button>
+    <button class="tool-btn" onclick="document.getElementById('file-input').click()">📂 Manual Add</button>
     <input type="file" id="file-input" multiple accept="image/*" onchange="handleFileUpload(event)">
     <div id="file-counter">Chart ID: -</div>
     <div id="progress-tag" class="badge" style="display:none;">REVIEWED</div>
@@ -125,24 +125,23 @@
 
 <div id="main-container">
   <div id="canvas-wrapper">
-    <div id="status-overlay">Loading Chart...</div>
+    <div id="status-overlay">Fetching charts...</div>
     <canvas id="chartCanvas"></canvas>
   </div>
 </div>
 
 <script>
-  // 1. CHART ASSET MANIFEST (Add your hosted filenames/URLs here for remote loading)
-  let chartList = [
-    "charts/chart_01.png",
-    "charts/chart_02.png",
-    "charts/chart_03.png"
-  ];
+  // --- GITHUB REPO CONFIGURATION ---
+  const GITHUB_USERNAME = "lawcheuklem-bit";
+  const REPO_NAME = "btcwoodpecker";
+  const CHARTS_FOLDER = "charts/volume1";
 
+  let chartList = [];
   let currentIndex = 0;
   let currentImage = new Image();
   let currentFileId = "";
 
-  // 2. STATE & PERSISTENCE (Saved per chart ID in localStorage)
+  // State & Persistence (localStorage by Chart ID)
   let progressMap = JSON.parse(localStorage.getItem('woodpecker_progress') || '{}');
   let drawingsMap = JSON.parse(localStorage.getItem('woodpecker_drawings') || '{}');
 
@@ -169,6 +168,43 @@
   const fileCounter = document.getElementById('file-counter');
   const progressTag = document.getElementById('progress-tag');
   const timerDisplay = document.getElementById('timer');
+
+  // Automatically fetch chart list directly from GitHub repo folder
+  async function fetchChartsFromGitHub() {
+    statusOverlay.textContent = "Loading charts from GitHub...";
+    statusOverlay.style.display = 'block';
+
+    const apiUrl = `https://api.github.com/repos/${GITHUB_USERNAME}/${REPO_NAME}/contents/${CHARTS_FOLDER}`;
+
+    try {
+      const response = await fetch(apiUrl);
+      if (!response.ok) throw new Error("Could not access charts folder via GitHub API");
+      
+      const data = await response.json();
+      
+      // Filter image files
+      const imageFiles = data.filter(item => 
+        item.type === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(item.name)
+      );
+
+      // Natural numerical sort (e.g. chart1, chart2, chart10)
+      imageFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+      chartList = imageFiles.map(file => file.download_url);
+
+      if (chartList.length === 0) {
+        statusOverlay.textContent = `No images found in /${CHARTS_FOLDER}`;
+        return;
+      }
+
+      currentIndex = 0;
+      startTimer();
+      loadChart(currentIndex);
+    } catch (err) {
+      console.error("GitHub API load failed:", err);
+      statusOverlay.textContent = "Could not fetch charts. Check folder or upload manually.";
+    }
+  }
 
   // Handle uploaded files directly from PC/iPad photo library/files
   function handleFileUpload(event) {
@@ -198,7 +234,7 @@
     }
 
     const src = chartList[index];
-    currentFileId = src.split('/').pop().split('?')[0];
+    currentFileId = decodeURIComponent(src.split('/').pop().split('?')[0]);
     fileCounter.textContent = `ID: ${currentFileId} (${index + 1}/${chartList.length})`;
 
     if (progressMap[currentFileId]) {
@@ -255,7 +291,7 @@
     };
   }
 
-  // 3. POINTER EVENTS (Works with Mouse, Touch, & Apple Pencil)
+  // Pointer Events (Touch, Pencil, Mouse)
   canvas.addEventListener('pointerdown', (e) => {
     const coords = getCanvasCoords(e);
 
@@ -438,9 +474,8 @@
     if (e.code === 'KeyC') startCalibration();
   });
 
-  // Initialize
-  startTimer();
-  loadChart(0);
+  // Fetch charts on load
+  fetchChartsFromGitHub();
 </script>
 
 </body>
