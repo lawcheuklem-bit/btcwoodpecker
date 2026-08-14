@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Woodpecker Chart Drill App</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background-color: #121212;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      background-color: #1e1e1e;
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #333;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .info-panel { display: flex; gap: 12px; font-weight: 600; font-size: 13px; align-items: center; }
+    .controls-panel { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    
+    .tool-btn {
+      background: #2a2a2a;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      touch-action: manipulation;
+    }
+    .tool-btn:active, .tool-btn.active { border-color: #00ffcc; background: #1a3330; color: #00ffcc; }
+    .btn-pen { border-color: #e040fb; color: #e040fb; }
+    .btn-pen.active { background: #380b42; }
+    .btn-green { border-color: #00c853; color: #00c853; }
+    .btn-green.active { background: #052e16; }
+    .btn-red { border-color: #ff5252; color: #ff5252; }
+    .btn-red.active { background: #3b1212; }
+    .btn-target { border-color: #2196f3; color: #2196f3; }
+    .btn-target.active { background: #0d2a4a; }
+    .btn-stop { border-color: #ff9800; color: #ff9800; }
+    .btn-stop.active { background: #3d2400; }
+    .btn-action { background: #004d40; border-color: #00bfa5; color: #fff; }
+
+    #main-container {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+      background: #000;
+      overflow: auto;
+    }
+    #canvas-wrapper {
+      position: relative;
+      display: inline-block;
+    }
+    canvas {
+      display: block;
+      cursor: crosshair;
+      touch-action: none; /* Prevents iPad scroll gestures while drawing */
+    }
+    #status-overlay {
+      position: absolute;
+      top: 15px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.85);
+      color: #00ffcc;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      border: 1px solid #00ffcc;
+      z-index: 10;
+    }
+    .badge {
+      background: #00ffcc;
+      color: #000;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 11px;
+    }
+    #file-input { display: none; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="info-panel">
+    <button class="tool-btn" onclick="document.getElementById('file-input').click()">📂 Upload/Add Charts</button>
+    <input type="file" id="file-input" multiple accept="image/*" onchange="handleFileUpload(event)">
+    <div id="file-counter">Chart ID: -</div>
+    <div id="progress-tag" class="badge" style="display:none;">REVIEWED</div>
+    <div id="timer">Time: 00:00</div>
+  </div>
+
+  <div class="controls-panel">
+    <!-- Annotation Tools -->
+    <button id="btn-pen" class="tool-btn btn-pen" onclick="setTool('pen')">✏️ Pen</button>
+    <button id="btn-buy" class="tool-btn btn-green" onclick="setTool('buy')">Buy (B)</button>
+    <button id="btn-sell" class="tool-btn btn-red" onclick="setTool('sell')">Sell (S)</button>
+    <button id="btn-target" class="tool-btn btn-target" onclick="setTool('target')">Target (T)</button>
+    <button id="btn-stop" class="tool-btn btn-stop" onclick="setTool('stop')">Stop (L)</button>
+    <button class="tool-btn" onclick="clearDrawings()">Clear</button>
+    
+    <!-- Drill Controls for iPad/Touch -->
+    <button class="tool-btn btn-action" onclick="advanceBar(1)">▶ +1 Bar</button>
+    <button class="tool-btn btn-action" onclick="revealChart()">👁 Reveal (R)</button>
+    <button class="tool-btn btn-action" onclick="nextChart()">⏭ Next (N)</button>
+    <button class="tool-btn" onclick="startCalibration()">🎯 Recalibrate (C)</button>
+  </div>
+</header>
+
+<div id="main-container">
+  <div id="canvas-wrapper">
+    <div id="status-overlay">Loading Chart...</div>
+    <canvas id="chartCanvas"></canvas>
+  </div>
+</div>
+
+<script>
+  // 1. CHART ASSET MANIFEST (Add your hosted filenames/URLs here for remote loading)
+  let chartList = [
+    "charts/chart_01.png",
+    "charts/chart_02.png",
+    "charts/chart_03.png"
+  ];
+
+  let currentIndex = 0;
+  let currentImage = new Image();
+  let currentFileId = "";
+
+  // 2. STATE & PERSISTENCE (Saved per chart ID in localStorage)
+  let progressMap = JSON.parse(localStorage.getItem('woodpecker_progress') || '{}');
+  let drawingsMap = JSON.parse(localStorage.getItem('woodpecker_drawings') || '{}');
+
+  let appState = 'idle';
+  let activeTool = null; // 'pen', 'buy', 'sell', 'target', 'stop'
+
+  let x1 = 0, x2 = 0;
+  let barWidth = 0;
+  let currentBarIndex = 5;
+  let currentDrawings = []; 
+
+  let isPointerDown = false;
+  let currentStroke = [];
+  let drawStart = { x: 0, y: 0 };
+  let drawCurrent = { x: 0, y: 0 };
+
+  let timerInterval = null;
+  let secondsElapsed = 0;
+
+  const canvasWrapper = document.getElementById('canvas-wrapper');
+  const canvas = document.getElementById('chartCanvas');
+  const ctx = canvas.getContext('2d');
+  const statusOverlay = document.getElementById('status-overlay');
+  const fileCounter = document.getElementById('file-counter');
+  const progressTag = document.getElementById('progress-tag');
+  const timerDisplay = document.getElementById('timer');
+
+  // Handle uploaded files directly from PC/iPad photo library/files
+  function handleFileUpload(event) {
+    const files = Array.from(event.target.files);
+    if (!files.length) return;
+    chartList = files.map(file => URL.createObjectURL(file));
+    currentIndex = 0;
+    startTimer();
+    loadChart(currentIndex);
+  }
+
+  function startTimer() {
+    clearInterval(timerInterval);
+    secondsElapsed = 0;
+    timerInterval = setInterval(() => {
+      secondsElapsed++;
+      const mins = String(Math.floor(secondsElapsed / 60)).padStart(2, '0');
+      const secs = String(secondsElapsed % 60).padStart(2, '0');
+      timerDisplay.textContent = `Time: ${mins}:${secs}`;
+    }, 1000);
+  }
+
+  function loadChart(index) {
+    if (index >= chartList.length) {
+      alert(`Set Completed! Total Time: ${timerDisplay.textContent}`);
+      return;
+    }
+
+    const src = chartList[index];
+    currentFileId = src.split('/').pop().split('?')[0];
+    fileCounter.textContent = `ID: ${currentFileId} (${index + 1}/${chartList.length})`;
+
+    if (progressMap[currentFileId]) {
+      progressTag.style.display = 'inline-block';
+    } else {
+      progressTag.style.display = 'none';
+    }
+
+    currentDrawings = drawingsMap[currentFileId] || [];
+
+    currentImage = new Image();
+    currentImage.crossOrigin = "anonymous";
+    currentImage.onload = () => {
+      canvas.width = currentImage.width;
+      canvas.height = currentImage.height;
+      startCalibration();
+    };
+    currentImage.src = src;
+  }
+
+  function startCalibration() {
+    appState = 'calibration_1';
+    statusOverlay.textContent = "STEP 1: Tap center of Bar 1 (Left side)";
+    statusOverlay.style.display = 'block';
+    drawCanvas();
+  }
+
+  function setTool(tool) {
+    activeTool = (activeTool === tool) ? null : tool;
+    updateToolUI();
+  }
+
+  function updateToolUI() {
+    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    if (activeTool) {
+      document.getElementById(`btn-${activeTool}`)?.classList.add('active');
+    }
+  }
+
+  function clearDrawings() {
+    currentDrawings = [];
+    delete drawingsMap[currentFileId];
+    localStorage.setItem('woodpecker_drawings', JSON.stringify(drawingsMap));
+    drawCanvas();
+  }
+
+  function getCanvasCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  }
+
+  // 3. POINTER EVENTS (Works with Mouse, Touch, & Apple Pencil)
+  canvas.addEventListener('pointerdown', (e) => {
+    const coords = getCanvasCoords(e);
+
+    if (appState === 'calibration_1') {
+      x1 = coords.x;
+      appState = 'calibration_2';
+      statusOverlay.textContent = "STEP 2: Tap center of Bar 2";
+      drawCanvas();
+    } else if (appState === 'calibration_2') {
+      x2 = coords.x;
+      barWidth = Math.abs(x2 - x1);
+      if (barWidth === 0) barWidth = 10;
+      appState = 'drilling';
+      currentBarIndex = 5;
+      statusOverlay.textContent = "Calibrated! Use Space or '+1 Bar' to advance.";
+      setTimeout(() => { statusOverlay.style.display = 'none'; }, 2000);
+      drawCanvas();
+    } else if ((appState === 'drilling' || appState === 'revealed') && activeTool) {
+      isPointerDown = true;
+      drawStart = coords;
+      drawCurrent = coords;
+
+      if (activeTool === 'pen') {
+        currentStroke = [coords];
+      }
+    }
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!isPointerDown) return;
+    drawCurrent = getCanvasCoords(e);
+
+    if (activeTool === 'pen') {
+      currentStroke.push(drawCurrent);
+    }
+    drawCanvas();
+  });
+
+  canvas.addEventListener('pointerup', () => {
+    if (!isPointerDown) return;
+    isPointerDown = false;
+
+    if (activeTool === 'pen') {
+      if (currentStroke.length > 1) {
+        currentDrawings.push({ type: 'pen', points: currentStroke });
+        saveDrawings();
+      }
+      currentStroke = [];
+    } else {
+      let x = Math.min(drawStart.x, drawCurrent.x);
+      let y = Math.min(drawStart.y, drawCurrent.y);
+      let w = Math.abs(drawCurrent.x - drawStart.x);
+      let h = Math.abs(drawCurrent.y - drawStart.y);
+
+      if (w < 5 && h < 5) {
+        w = 40;
+        h = 30;
+        x = drawStart.x - w / 2;
+        y = drawStart.y - h / 2;
+      }
+
+      currentDrawings.push({ type: activeTool, x, y, w, h });
+      saveDrawings();
+    }
+    drawCanvas();
+  });
+
+  function saveDrawings() {
+    drawingsMap[currentFileId] = currentDrawings;
+    localStorage.setItem('woodpecker_drawings', JSON.stringify(drawingsMap));
+  }
+
+  function getToolColors(type) {
+    switch (type) {
+      case 'buy': return { stroke: '#00c853', fill: 'rgba(0, 200, 83, 0.25)' };
+      case 'sell': return { stroke: '#ff5252', fill: 'rgba(255, 82, 82, 0.25)' };
+      case 'target': return { stroke: '#2196f3', fill: 'rgba(33, 150, 243, 0.25)' };
+      case 'stop': return { stroke: '#ff9800', fill: 'rgba(255, 152, 0, 0.25)' };
+      case 'pen': return { stroke: '#e040fb', fill: 'transparent' };
+      default: return { stroke: '#ffffff', fill: 'rgba(255, 255, 255, 0.25)' };
+    }
+  }
+
+  function drawItem(item) {
+    const colors = getToolColors(item.type);
+    ctx.strokeStyle = colors.stroke;
+    ctx.fillStyle = colors.fill;
+
+    if (item.type === 'pen') {
+      if (!item.points || item.points.length < 2) return;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(item.points[0].x, item.points[0].y);
+      for (let i = 1; i < item.points.length; i++) {
+        ctx.lineTo(item.points[i].x, item.points[i].y);
+      }
+      ctx.stroke();
+    } else {
+      ctx.lineWidth = 2;
+      ctx.fillRect(item.x, item.y, item.w, item.h);
+      ctx.strokeRect(item.x, item.y, item.w, item.h);
+    }
+  }
+
+  function drawCanvas() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(currentImage, 0, 0);
+
+    // Draw saved items
+    currentDrawings.forEach(item => drawItem(item));
+
+    // Draw live stroke/box preview
+    if (isPointerDown) {
+      if (activeTool === 'pen') {
+        drawItem({ type: 'pen', points: currentStroke });
+      } else {
+        const x = Math.min(drawStart.x, drawCurrent.x);
+        const y = Math.min(drawStart.y, drawCurrent.y);
+        const w = Math.abs(drawCurrent.x - drawStart.x);
+        const h = Math.abs(drawCurrent.y - drawStart.y);
+        drawItem({ type: activeTool, x, y, w, h });
+      }
+    }
+
+    // Masking / Calibration
+    if (appState === 'calibration_1') {
+      ctx.fillStyle = '#121212';
+      ctx.fillRect(120, 0, canvas.width - 120, canvas.height);
+    } else if (appState === 'calibration_2') {
+      ctx.fillStyle = '#121212';
+      ctx.fillRect(x1 + 80, 0, canvas.width - (x1 + 80), canvas.height);
+      ctx.strokeStyle = '#00ffcc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x1, 0); ctx.lineTo(x1, canvas.height);
+      ctx.stroke();
+    } else if (appState === 'drilling') {
+      const revealX = x1 + (currentBarIndex * barWidth) - (barWidth / 2);
+      if (revealX < canvas.width) {
+        ctx.fillStyle = '#121212';
+        ctx.fillRect(revealX, 0, canvas.width - revealX, canvas.height);
+      }
+    }
+  }
+
+  // Drill Navigation Functions
+  function advanceBar(delta) {
+    if (appState !== 'drilling' && appState !== 'revealed') return;
+    appState = 'drilling';
+    currentBarIndex = Math.max(1, currentBarIndex + delta);
+    drawCanvas();
+  }
+
+  function revealChart() {
+    appState = 'revealed';
+    progressMap[currentFileId] = true;
+    localStorage.setItem('woodpecker_progress', JSON.stringify(progressMap));
+    progressTag.style.display = 'inline-block';
+    drawCanvas();
+  }
+
+  function nextChart() {
+    currentIndex++;
+    loadChart(currentIndex);
+  }
+
+  // Keyboard Shortcuts
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyP') setTool('pen');
+    if (e.code === 'KeyB') setTool('buy');
+    if (e.code === 'KeyS') setTool('sell');
+    if (e.code === 'KeyT') setTool('target');
+    if (e.code === 'KeyL') setTool('stop');
+    if (e.code === 'Space' || e.code === 'ArrowRight') { e.preventDefault(); advanceBar(1); }
+    if (e.code === 'ArrowLeft') { e.preventDefault(); advanceBar(-1); }
+    if (e.code === 'KeyR') revealChart();
+    if (e.code === 'KeyN') nextChart();
+    if (e.code === 'KeyC') startCalibration();
+  });
+
+  // Initialize
+  startTimer();
+  loadChart(0);
+</script>
+
+</body>
+</html>
