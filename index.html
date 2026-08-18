@@ -73,7 +73,7 @@
     canvas {
       display: block;
       cursor: crosshair;
-      touch-action: none; /* Prevents iPad scrolling gestures while drawing */
+      touch-action: none;
     }
     #status-overlay {
       position: absolute;
@@ -98,7 +98,6 @@
       font-size: 11px;
     }
 
-    /* Scorecard & History Panel */
     #log-panel {
       width: 100%;
       max-width: 900px;
@@ -204,7 +203,6 @@
     <canvas id="chartCanvas"></canvas>
   </div>
 
-  <!-- Scorecard & Comment Log Panel -->
   <div id="log-panel">
     <div class="log-header">
       <span>Drill History & Comments</span>
@@ -239,7 +237,12 @@
   // --- SUPABASE CONFIGURATION ---
   const SUPABASE_URL = "https://nhffpyutgsifhyypszsk.supabase.co";
   const SUPABASE_KEY = "sb_publishable_XBKldMVrjiuUfrJb47-4zg_M-J78317";
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  let supabase = null;
+  try {
+    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  } catch (e) {
+    console.warn("Supabase init fallback:", e);
+  }
 
   // --- GITHUB REPO CONFIGURATION ---
   const GITHUB_USERNAME = "lawcheuklem-bit";
@@ -251,7 +254,11 @@
   let currentImage = new Image();
   let currentFileId = "";
 
-  // Cloud Sync State
+  // Local fallback storage
+  let localDrawings = JSON.parse(localStorage.getItem('wp_drawings') || '{}');
+  let localComments = JSON.parse(localStorage.getItem('wp_comments') || '{}');
+  let localProgress = JSON.parse(localStorage.getItem('wp_progress') || '{}');
+
   let progressState = false;
   let currentDrawings = []; 
   let currentComments = [];
@@ -271,7 +278,6 @@
   let timerInterval = null;
   let secondsElapsed = 0;
 
-  const canvasWrapper = document.getElementById('canvas-wrapper');
   const canvas = document.getElementById('chartCanvas');
   const ctx = canvas.getContext('2d');
   const statusOverlay = document.getElementById('status-overlay');
@@ -287,13 +293,16 @@
     const apiUrl = `https://api.github.com/repos/${GITHUB_USERNAME}/${REPO_NAME}/contents/${CHARTS_FOLDER}`;
     try {
       const response = await fetch(apiUrl);
-      if (!response.ok) throw new Error("Could not access charts folder via GitHub API");
+      if (!response.ok) throw new Error(`GitHub API Error: ${response.status}`);
       const data = await response.json();
+      
       const imageFiles = data.filter(item => item.type === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(item.name));
       imageFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      
       chartList = imageFiles.map(file => file.download_url);
+      
       if (chartList.length === 0) {
-        statusOverlay.textContent = `No images found in /${CHARTS_FOLDER}`;
+        statusOverlay.textContent = `No images in ${CHARTS_FOLDER}`;
         return;
       }
       currentIndex = 0;
@@ -301,7 +310,7 @@
       loadChart(currentIndex);
     } catch (err) {
       console.error(err);
-      statusOverlay.textContent = "Error loading charts from GitHub repo.";
+      statusOverlay.textContent = "Could not fetch charts. Check repo or use Manual Add.";
     }
   }
 
@@ -325,7 +334,7 @@
     }, 1000);
   }
 
-  async function loadChart(index) {
+  function loadChart(index) {
     if (index >= chartList.length) {
       alert(`Set Completed! Total Time: ${timerDisplay.textContent}`);
       return;
@@ -336,31 +345,14 @@
     fileCounter.textContent = `ID: ${currentFileId} (${index + 1}/${chartList.length})`;
     logChartTitle.textContent = `Current: ${currentFileId}`;
 
-    statusOverlay.textContent = "Syncing with cloud storage...";
-    statusOverlay.style.display = 'block';
-
-    // Fetch synced data from Supabase
-    try {
-      const { data, error } = await supabase.from('chart_data').select('*').eq('file_id', currentFileId).single();
-      if (data) {
-        progressState = data.reviewed || false;
-        currentDrawings = data.drawings || [];
-        currentComments = data.comments || [];
-      } else {
-        progressState = false;
-        currentDrawings = [];
-        currentComments = [];
-      }
-    } catch (err) {
-      console.warn("New chart / offline fallback:", err);
-      progressState = false;
-      currentDrawings = [];
-      currentComments = [];
-    }
-
+    // Load local state first so UI is immediately responsive
+    progressState = localProgress[currentFileId] || false;
+    currentDrawings = localDrawings[currentFileId] || [];
+    currentComments = localComments[currentFileId] || [];
     progressTag.style.display = progressState ? 'inline-block' : 'none';
     renderCommentsTable();
 
+    // Start image loading right away
     currentImage = new Image();
     currentImage.crossOrigin = "anonymous";
     currentImage.onload = () => {
@@ -369,9 +361,32 @@
       startCalibration();
     };
     currentImage.src = src;
+
+    // Fetch cloud sync in background without blocking chart display
+    if (supabase) {
+      supabase.from('chart_data').select('*').eq('file_id', currentFileId).maybeSingle()
+        .then(({ data }) => {
+          if (data) {
+            progressState = data.reviewed || false;
+            currentDrawings = data.drawings || [];
+            currentComments = data.comments || [];
+            progressTag.style.display = progressState ? 'inline-block' : 'none';
+            renderCommentsTable();
+            drawCanvas();
+          }
+        }).catch(err => console.warn("Supabase fetch skipped:", err));
+    }
   }
 
   async function syncToCloud() {
+    localProgress[currentFileId] = progressState;
+    localDrawings[currentFileId] = currentDrawings;
+    localComments[currentFileId] = currentComments;
+    localStorage.setItem('wp_progress', JSON.stringify(localProgress));
+    localStorage.setItem('wp_drawings', JSON.stringify(localDrawings));
+    localStorage.setItem('wp_comments', JSON.stringify(localComments));
+
+    if (!supabase) return;
     try {
       await supabase.from('chart_data').upsert({
         file_id: currentFileId,
@@ -381,7 +396,7 @@
         updated_at: new Date().toISOString()
       });
     } catch (err) {
-      console.error("Cloud sync failed:", err);
+      console.warn("Cloud sync error:", err);
     }
   }
 
@@ -459,7 +474,6 @@
     return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
   }
 
-  // Pointer Events (Apple Pencil, Touch, Mouse)
   canvas.addEventListener('pointerdown', (e) => {
     const coords = getCanvasCoords(e);
 
@@ -551,6 +565,7 @@
   function drawCanvas() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(currentImage, 0, 0);
+
     currentDrawings.forEach(item => drawItem(item));
 
     if (isPointerDown) {
@@ -599,7 +614,6 @@
     loadChart(currentIndex);
   }
 
-  // Keyboard Shortcuts (ignores shortcuts while typing in notes/marks fields)
   window.addEventListener('keydown', (e) => {
     if (['input-marks', 'input-comment'].includes(document.activeElement.id)) {
       if (e.key === 'Enter') saveCommentEntry();
