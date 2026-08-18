@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Woodpecker Chart Drill App</title>
+  <!-- Supabase CDN Library -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -72,7 +73,7 @@
     canvas {
       display: block;
       cursor: crosshair;
-      touch-action: none; /* Prevents iPad scroll gestures when drawing */
+      touch-action: none; /* Prevents iPad scrolling gestures while drawing */
     }
     #status-overlay {
       position: absolute;
@@ -97,7 +98,7 @@
       font-size: 11px;
     }
 
-    /* Drill Scorecard & History Panel */
+    /* Scorecard & History Panel */
     #log-panel {
       width: 100%;
       max-width: 900px;
@@ -203,6 +204,7 @@
     <canvas id="chartCanvas"></canvas>
   </div>
 
+  <!-- Scorecard & Comment Log Panel -->
   <div id="log-panel">
     <div class="log-header">
       <span>Drill History & Comments</span>
@@ -219,7 +221,7 @@
       <table>
         <thead>
           <tr>
-            <th>Date</th>
+            <th>YYYYMMDD</th>
             <th>Marks</th>
             <th>Comment</th>
             <th></th>
@@ -235,7 +237,7 @@
 
 <script>
   // --- SUPABASE CONFIGURATION ---
-  const SUPABASE_URL = "https://nhffpyutgsifhyypszsk.supabase.co"; 
+  const SUPABASE_URL = "https://nhffpyutgsifhyypszsk.supabase.co";
   const SUPABASE_KEY = "sb_publishable_XBKldMVrjiuUfrJb47-4zg_M-J78317";
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -337,7 +339,7 @@
     statusOverlay.textContent = "Syncing with cloud storage...";
     statusOverlay.style.display = 'block';
 
-    // Fetch chart drawings & history from Supabase
+    // Fetch synced data from Supabase
     try {
       const { data, error } = await supabase.from('chart_data').select('*').eq('file_id', currentFileId).single();
       if (data) {
@@ -350,7 +352,7 @@
         currentComments = [];
       }
     } catch (err) {
-      console.warn("New chart or offline:", err);
+      console.warn("New chart / offline fallback:", err);
       progressState = false;
       currentDrawings = [];
       currentComments = [];
@@ -379,7 +381,7 @@
         updated_at: new Date().toISOString()
       });
     } catch (err) {
-      console.error("Cloud syncing failed:", err);
+      console.error("Cloud sync failed:", err);
     }
   }
 
@@ -457,7 +459,7 @@
     return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
   }
 
-  // Pointer Events (Touch, Pencil, Mouse)
+  // Pointer Events (Apple Pencil, Touch, Mouse)
   canvas.addEventListener('pointerdown', (e) => {
     const coords = getCanvasCoords(e);
 
@@ -597,7 +599,7 @@
     loadChart(currentIndex);
   }
 
-  // Keyboard Shortcuts (disabled while typing in notes/marks fields)
+  // Keyboard Shortcuts (ignores shortcuts while typing in notes/marks fields)
   window.addEventListener('keydown', (e) => {
     if (['input-marks', 'input-comment'].includes(document.activeElement.id)) {
       if (e.key === 'Enter') saveCommentEntry();
