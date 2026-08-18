@@ -57,6 +57,7 @@
     .btn-stop { border-color: #ff9800; color: #ff9800; }
     .btn-stop.active { background: #3d2400; }
     .btn-action { background: #004d40; border-color: #00bfa5; color: #fff; }
+    .btn-menu { background: #1f2937; border-color: #4b5563; color: #93c5fd; }
 
     #main-container {
       flex: 1;
@@ -172,12 +173,82 @@
       font-weight: bold;
     }
     #file-input { display: none; }
+
+    /* Modal Index / Menu Styles */
+    #menu-modal {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-content {
+      background: #1c1c1c;
+      border: 1px solid #444;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 650px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+    }
+    .modal-header {
+      padding: 12px 16px;
+      background: #252525;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #333;
+    }
+    .modal-title { font-size: 15px; font-weight: 700; color: #00ffcc; }
+    .close-btn {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 20px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .close-btn:hover { color: #fff; }
+    .modal-list {
+      padding: 12px;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 8px;
+    }
+    .menu-item-btn {
+      background: #2a2a2a;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      align-items: center;
+      word-break: break-all;
+    }
+    .menu-item-btn:hover { border-color: #00ffcc; background: #1a3330; }
+    .menu-item-btn.active-item { border-color: #e040fb; background: #380b42; font-weight: bold; }
+    .menu-item-btn .item-tag { font-size: 10px; padding: 2px 4px; border-radius: 4px; }
+    .tag-done { background: #00c853; color: #000; }
+    .tag-todo { background: #444; color: #aaa; }
   </style>
 </head>
 <body>
 
 <header>
   <div class="info-panel">
+    <button class="tool-btn btn-menu" id="btn-open-menu">📑 Index</button>
     <button class="tool-btn" id="btn-manual-add">📂 Manual Add</button>
     <input type="file" id="file-input" multiple accept="image/*">
     <div id="file-counter">Chart ID: -</div>
@@ -186,13 +257,14 @@
   </div>
 
   <div class="controls-panel">
-    <button id="btn-pen" class="tool-btn btn-pen">✏️ Pen</button>
+    <button id="btn-pen" class="tool-btn btn-pen">✏️ Pen (D)</button>
     <button id="btn-buy" class="tool-btn btn-green">Buy (B)</button>
     <button id="btn-sell" class="tool-btn btn-red">Sell (S)</button>
     <button id="btn-target" class="tool-btn btn-target">Target (T)</button>
     <button id="btn-stop" class="tool-btn btn-stop">Stop (L)</button>
     <button id="btn-clear" class="tool-btn">Clear</button>
     
+    <button id="btn-prev" class="tool-btn btn-action">⏮ Prev (P)</button>
     <button id="btn-advance" class="tool-btn btn-action">▶ +1 Bar</button>
     <button id="btn-reveal" class="tool-btn btn-action">👁 Reveal (R)</button>
     <button id="btn-next" class="tool-btn btn-action">⏭ Next (N)</button>
@@ -233,6 +305,17 @@
         </tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<!-- Modal Index Dialog -->
+<div id="menu-modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <span class="modal-title">Chart Index & Navigation</span>
+      <button class="close-btn" id="btn-close-menu">✕</button>
+    </div>
+    <div class="modal-list" id="modal-grid"></div>
   </div>
 </div>
 
@@ -290,6 +373,8 @@
   const timerDisplay = document.getElementById('timer');
   const logTableBody = document.getElementById('log-table-body');
   const logChartTitle = document.getElementById('log-chart-title');
+  const menuModal = document.getElementById('menu-modal');
+  const modalGrid = document.getElementById('modal-grid');
 
   async function fetchChartsFromGitHub() {
     statusOverlay.textContent = "Loading charts from GitHub...";
@@ -338,15 +423,17 @@
     }, 1000);
   }
 
-  function loadChart(index) {
-    if (index >= chartList.length) {
-      alert(`Set Completed! Total Time: ${timerDisplay.textContent}`);
-      return;
-    }
+  function getFileIdFromUrl(url) {
+    return decodeURIComponent(url.split('/').pop().split('?')[0]);
+  }
 
-    const src = chartList[index];
-    currentFileId = decodeURIComponent(src.split('/').pop().split('?')[0]);
-    fileCounter.textContent = `ID: ${currentFileId} (${index + 1}/${chartList.length})`;
+  function loadChart(index) {
+    if (index < 0 || index >= chartList.length) return;
+    currentIndex = index;
+
+    const src = chartList[currentIndex];
+    currentFileId = getFileIdFromUrl(src);
+    fileCounter.textContent = `ID: ${currentFileId} (${currentIndex + 1}/${chartList.length})`;
     logChartTitle.textContent = `Current: ${currentFileId}`;
 
     progressState = localProgress[currentFileId] || false;
@@ -371,6 +458,9 @@
             progressState = data.reviewed || false;
             currentDrawings = data.drawings || [];
             currentComments = data.comments || [];
+            localProgress[currentFileId] = progressState;
+            localDrawings[currentFileId] = currentDrawings;
+            localComments[currentFileId] = currentComments;
             progressTag.style.display = progressState ? 'inline-block' : 'none';
             renderCommentsTable();
             drawCanvas();
@@ -447,6 +537,28 @@
         const idx = parseInt(e.target.getAttribute('data-idx'), 10);
         deleteCommentEntry(idx);
       });
+    });
+  }
+
+  function renderMenuModal() {
+    modalGrid.innerHTML = '';
+    chartList.forEach((url, idx) => {
+      const fId = getFileIdFromUrl(url);
+      const isReviewed = localProgress[fId] || false;
+      const isCurrent = idx === currentIndex;
+
+      const btn = document.createElement('button');
+      btn.className = `menu-item-btn ${isCurrent ? 'active-item' : ''}`;
+      btn.innerHTML = `
+        <span>#${idx + 1}</span>
+        <span style="font-size: 11px; color:#ddd;">${fId}</span>
+        <span class="item-tag ${isReviewed ? 'tag-done' : 'tag-todo'}">${isReviewed ? 'REVIEWED' : 'UNREVIEWED'}</span>
+      `;
+      btn.onclick = () => {
+        menuModal.style.display = 'none';
+        loadChart(idx);
+      };
+      modalGrid.appendChild(btn);
     });
   }
 
@@ -618,11 +730,31 @@
   }
 
   function nextChart() {
-    currentIndex++;
-    loadChart(currentIndex);
+    if (currentIndex < chartList.length - 1) {
+      loadChart(currentIndex + 1);
+    } else {
+      alert(`You have reached the last chart! Total Time: ${timerDisplay.textContent}`);
+    }
+  }
+
+  function prevChart() {
+    if (currentIndex > 0) {
+      loadChart(currentIndex - 1);
+    }
   }
 
   // Button Listeners
+  document.getElementById('btn-open-menu').onclick = () => {
+    renderMenuModal();
+    menuModal.style.display = 'flex';
+  };
+  document.getElementById('btn-close-menu').onclick = () => {
+    menuModal.style.display = 'none';
+  };
+  window.onclick = (e) => {
+    if (e.target === menuModal) menuModal.style.display = 'none';
+  };
+
   document.getElementById('btn-manual-add').onclick = () => document.getElementById('file-input').click();
   document.getElementById('file-input').onchange = handleFileUpload;
   document.getElementById('btn-pen').onclick = () => setTool('pen');
@@ -631,6 +763,7 @@
   document.getElementById('btn-target').onclick = () => setTool('target');
   document.getElementById('btn-stop').onclick = () => setTool('stop');
   document.getElementById('btn-clear').onclick = clearDrawings;
+  document.getElementById('btn-prev').onclick = prevChart;
   document.getElementById('btn-advance').onclick = () => advanceBar(1);
   document.getElementById('btn-reveal').onclick = revealChart;
   document.getElementById('btn-next').onclick = nextChart;
@@ -642,16 +775,18 @@
       if (e.key === 'Enter') saveCommentEntry();
       return;
     }
-    if (e.code === 'KeyP') setTool('pen');
+    if (e.code === 'KeyD') setTool('pen');
     if (e.code === 'KeyB') setTool('buy');
     if (e.code === 'KeyS') setTool('sell');
     if (e.code === 'KeyT') setTool('target');
     if (e.code === 'KeyL') setTool('stop');
+    if (e.code === 'KeyP') prevChart();
+    if (e.code === 'KeyN') nextChart();
     if (e.code === 'Space' || e.code === 'ArrowRight') { e.preventDefault(); advanceBar(1); }
     if (e.code === 'ArrowLeft') { e.preventDefault(); advanceBar(-1); }
     if (e.code === 'KeyR') revealChart();
-    if (e.code === 'KeyN') nextChart();
     if (e.code === 'KeyC') startCalibration();
+    if (e.code === 'Escape') menuModal.style.display = 'none';
   });
 
   fetchChartsFromGitHub();
