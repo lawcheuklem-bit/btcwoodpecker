@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Woodpecker Chart Drill App</title>
-  <!-- Supabase CDN Library -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -237,11 +236,14 @@
   // --- SUPABASE CONFIGURATION ---
   const SUPABASE_URL = "https://nhffpyutgsifhyypszsk.supabase.co";
   const SUPABASE_KEY = "sb_publishable_XBKldMVrjiuUfrJb47-4zg_M-J78317";
-  let supabase = null;
-  try {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  } catch (e) {
-    console.warn("Supabase init fallback:", e);
+  
+  let sbClient = null;
+  if (window.supabase && window.supabase.createClient) {
+    try {
+      sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    } catch (e) {
+      console.warn("Supabase initialization failed:", e);
+    }
   }
 
   // --- GITHUB REPO CONFIGURATION ---
@@ -254,7 +256,7 @@
   let currentImage = new Image();
   let currentFileId = "";
 
-  // Local fallback storage
+  // Local storage maps
   let localDrawings = JSON.parse(localStorage.getItem('wp_drawings') || '{}');
   let localComments = JSON.parse(localStorage.getItem('wp_comments') || '{}');
   let localProgress = JSON.parse(localStorage.getItem('wp_progress') || '{}');
@@ -345,14 +347,12 @@
     fileCounter.textContent = `ID: ${currentFileId} (${index + 1}/${chartList.length})`;
     logChartTitle.textContent = `Current: ${currentFileId}`;
 
-    // Load local state first so UI is immediately responsive
     progressState = localProgress[currentFileId] || false;
     currentDrawings = localDrawings[currentFileId] || [];
     currentComments = localComments[currentFileId] || [];
     progressTag.style.display = progressState ? 'inline-block' : 'none';
     renderCommentsTable();
 
-    // Start image loading right away
     currentImage = new Image();
     currentImage.crossOrigin = "anonymous";
     currentImage.onload = () => {
@@ -362,9 +362,8 @@
     };
     currentImage.src = src;
 
-    // Fetch cloud sync in background without blocking chart display
-    if (supabase) {
-      supabase.from('chart_data').select('*').eq('file_id', currentFileId).maybeSingle()
+    if (sbClient) {
+      sbClient.from('chart_data').select('*').eq('file_id', currentFileId).maybeSingle()
         .then(({ data }) => {
           if (data) {
             progressState = data.reviewed || false;
@@ -386,9 +385,9 @@
     localStorage.setItem('wp_drawings', JSON.stringify(localDrawings));
     localStorage.setItem('wp_comments', JSON.stringify(localComments));
 
-    if (!supabase) return;
+    if (!sbClient) return;
     try {
-      await supabase.from('chart_data').upsert({
+      await sbClient.from('chart_data').upsert({
         file_id: currentFileId,
         reviewed: progressState,
         drawings: currentDrawings,
