@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Woodpecker Chart Drill App</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
     body {
@@ -24,6 +25,7 @@
       border-bottom: 1px solid #333;
       flex-wrap: wrap;
       gap: 10px;
+      z-index: 20;
     }
     .info-panel { display: flex; gap: 12px; font-weight: 600; font-size: 13px; align-items: center; }
     .controls-panel { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -55,11 +57,13 @@
     #main-container {
       flex: 1;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
       align-items: center;
       position: relative;
       background: #000;
-      overflow: auto;
+      overflow-y: auto;
+      padding: 10px;
+      gap: 15px;
     }
     #canvas-wrapper {
       position: relative;
@@ -68,7 +72,7 @@
     canvas {
       display: block;
       cursor: crosshair;
-      touch-action: none; /* Prevents iPad scrolling gestures while drawing */
+      touch-action: none; /* Prevents iPad scroll gestures when drawing */
     }
     #status-overlay {
       position: absolute;
@@ -92,6 +96,78 @@
       border-radius: 10px;
       font-size: 11px;
     }
+
+    /* Drill Scorecard & History Panel */
+    #log-panel {
+      width: 100%;
+      max-width: 900px;
+      background: #181818;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      user-select: auto;
+    }
+    .log-header {
+      font-size: 14px;
+      font-weight: 700;
+      color: #00ffcc;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .log-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .log-form input {
+      background: #252525;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      outline: none;
+    }
+    .log-form input:focus { border-color: #00ffcc; }
+    #input-marks { width: 90px; text-align: center; }
+    #input-comment { flex: 1; min-width: 200px; }
+    
+    .log-table-container {
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      text-align: left;
+    }
+    th, td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #262626;
+    }
+    th {
+      background: #202020;
+      color: #888;
+      position: sticky;
+      top: 0;
+    }
+    td.date-col { width: 110px; color: #aaa; font-family: monospace; }
+    td.mark-col { width: 80px; font-weight: 700; color: #00ffcc; font-family: monospace; }
+    td.action-col { width: 50px; text-align: center; }
+    .del-btn {
+      color: #ff5252;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
     #file-input { display: none; }
   </style>
 </head>
@@ -107,7 +183,6 @@
   </div>
 
   <div class="controls-panel">
-    <!-- Annotation Tools -->
     <button id="btn-pen" class="tool-btn btn-pen" onclick="setTool('pen')">✏️ Pen</button>
     <button id="btn-buy" class="tool-btn btn-green" onclick="setTool('buy')">Buy (B)</button>
     <button id="btn-sell" class="tool-btn btn-red" onclick="setTool('sell')">Sell (S)</button>
@@ -115,7 +190,6 @@
     <button id="btn-stop" class="tool-btn btn-stop" onclick="setTool('stop')">Stop (L)</button>
     <button class="tool-btn" onclick="clearDrawings()">Clear</button>
     
-    <!-- Drill Controls for iPad/Touch -->
     <button class="tool-btn btn-action" onclick="advanceBar(1)">▶ +1 Bar</button>
     <button class="tool-btn btn-action" onclick="revealChart()">👁 Reveal (R)</button>
     <button class="tool-btn btn-action" onclick="nextChart()">⏭ Next (N)</button>
@@ -125,12 +199,46 @@
 
 <div id="main-container">
   <div id="canvas-wrapper">
-    <div id="status-overlay">Fetching charts...</div>
+    <div id="status-overlay">Loading...</div>
     <canvas id="chartCanvas"></canvas>
+  </div>
+
+  <div id="log-panel">
+    <div class="log-header">
+      <span>Drill History & Comments</span>
+      <span id="log-chart-title" style="color: #aaa; font-weight: normal; font-size: 12px;"></span>
+    </div>
+    
+    <div class="log-form">
+      <input type="text" id="input-marks" placeholder="Marks (e.g. 4/6)">
+      <input type="text" id="input-comment" placeholder="Entry notes, mistakes, observations...">
+      <button class="tool-btn btn-action" onclick="saveCommentEntry()">Save Entry</button>
+    </div>
+
+    <div class="log-table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Marks</th>
+            <th>Comment</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="log-table-body">
+          <tr><td colspan="4" style="color: #666; text-align: center;">No history for this chart yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
 <script>
+  // --- SUPABASE CONFIGURATION ---
+  const SUPABASE_URL = "https://nhffpyutgsifhyypszsk.supabase.co"; 
+  const SUPABASE_KEY = "sb_publishable_XBKldMVrjiuUfrJb47-4zg_M-J78317";
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
   // --- GITHUB REPO CONFIGURATION ---
   const GITHUB_USERNAME = "lawcheuklem-bit";
   const REPO_NAME = "btcwoodpecker";
@@ -141,17 +249,17 @@
   let currentImage = new Image();
   let currentFileId = "";
 
-  // State & Persistence (localStorage by Chart ID)
-  let progressMap = JSON.parse(localStorage.getItem('woodpecker_progress') || '{}');
-  let drawingsMap = JSON.parse(localStorage.getItem('woodpecker_drawings') || '{}');
+  // Cloud Sync State
+  let progressState = false;
+  let currentDrawings = []; 
+  let currentComments = [];
 
   let appState = 'idle';
-  let activeTool = null; // 'pen', 'buy', 'sell', 'target', 'stop'
+  let activeTool = null;
 
   let x1 = 0, x2 = 0;
   let barWidth = 0;
   let currentBarIndex = 5;
-  let currentDrawings = []; 
 
   let isPointerDown = false;
   let currentStroke = [];
@@ -168,45 +276,33 @@
   const fileCounter = document.getElementById('file-counter');
   const progressTag = document.getElementById('progress-tag');
   const timerDisplay = document.getElementById('timer');
+  const logTableBody = document.getElementById('log-table-body');
+  const logChartTitle = document.getElementById('log-chart-title');
 
-  // Automatically fetch chart list directly from GitHub repo folder
   async function fetchChartsFromGitHub() {
     statusOverlay.textContent = "Loading charts from GitHub...";
     statusOverlay.style.display = 'block';
-
     const apiUrl = `https://api.github.com/repos/${GITHUB_USERNAME}/${REPO_NAME}/contents/${CHARTS_FOLDER}`;
-
     try {
       const response = await fetch(apiUrl);
       if (!response.ok) throw new Error("Could not access charts folder via GitHub API");
-      
       const data = await response.json();
-      
-      // Filter image files
-      const imageFiles = data.filter(item => 
-        item.type === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(item.name)
-      );
-
-      // Natural numerical sort (e.g. chart1, chart2, chart10)
+      const imageFiles = data.filter(item => item.type === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(item.name));
       imageFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-
       chartList = imageFiles.map(file => file.download_url);
-
       if (chartList.length === 0) {
         statusOverlay.textContent = `No images found in /${CHARTS_FOLDER}`;
         return;
       }
-
       currentIndex = 0;
       startTimer();
       loadChart(currentIndex);
     } catch (err) {
-      console.error("GitHub API load failed:", err);
-      statusOverlay.textContent = "Could not fetch charts. Check folder or upload manually.";
+      console.error(err);
+      statusOverlay.textContent = "Error loading charts from GitHub repo.";
     }
   }
 
-  // Handle uploaded files directly from PC/iPad photo library/files
   function handleFileUpload(event) {
     const files = Array.from(event.target.files);
     if (!files.length) return;
@@ -227,7 +323,7 @@
     }, 1000);
   }
 
-  function loadChart(index) {
+  async function loadChart(index) {
     if (index >= chartList.length) {
       alert(`Set Completed! Total Time: ${timerDisplay.textContent}`);
       return;
@@ -236,14 +332,32 @@
     const src = chartList[index];
     currentFileId = decodeURIComponent(src.split('/').pop().split('?')[0]);
     fileCounter.textContent = `ID: ${currentFileId} (${index + 1}/${chartList.length})`;
+    logChartTitle.textContent = `Current: ${currentFileId}`;
 
-    if (progressMap[currentFileId]) {
-      progressTag.style.display = 'inline-block';
-    } else {
-      progressTag.style.display = 'none';
+    statusOverlay.textContent = "Syncing with cloud storage...";
+    statusOverlay.style.display = 'block';
+
+    // Fetch chart drawings & history from Supabase
+    try {
+      const { data, error } = await supabase.from('chart_data').select('*').eq('file_id', currentFileId).single();
+      if (data) {
+        progressState = data.reviewed || false;
+        currentDrawings = data.drawings || [];
+        currentComments = data.comments || [];
+      } else {
+        progressState = false;
+        currentDrawings = [];
+        currentComments = [];
+      }
+    } catch (err) {
+      console.warn("New chart or offline:", err);
+      progressState = false;
+      currentDrawings = [];
+      currentComments = [];
     }
 
-    currentDrawings = drawingsMap[currentFileId] || [];
+    progressTag.style.display = progressState ? 'inline-block' : 'none';
+    renderCommentsTable();
 
     currentImage = new Image();
     currentImage.crossOrigin = "anonymous";
@@ -253,6 +367,62 @@
       startCalibration();
     };
     currentImage.src = src;
+  }
+
+  async function syncToCloud() {
+    try {
+      await supabase.from('chart_data').upsert({
+        file_id: currentFileId,
+        reviewed: progressState,
+        drawings: currentDrawings,
+        comments: currentComments,
+        updated_at: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error("Cloud syncing failed:", err);
+    }
+  }
+
+  function saveCommentEntry() {
+    const marksInput = document.getElementById('input-marks');
+    const commentInput = document.getElementById('input-comment');
+    const marks = marksInput.value.trim();
+    const comment = commentInput.value.trim();
+
+    if (!marks && !comment) return;
+
+    const today = new Date();
+    const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '');
+
+    currentComments.unshift({ date: yyyymmdd, marks: marks || '-', comment: comment || '-' });
+    marksInput.value = '';
+    commentInput.value = '';
+    renderCommentsTable();
+    syncToCloud();
+  }
+
+  function deleteCommentEntry(idx) {
+    currentComments.splice(idx, 1);
+    renderCommentsTable();
+    syncToCloud();
+  }
+
+  function renderCommentsTable() {
+    logTableBody.innerHTML = '';
+    if (currentComments.length === 0) {
+      logTableBody.innerHTML = '<tr><td colspan="4" style="color: #666; text-align: center;">No history for this chart yet.</td></tr>';
+      return;
+    }
+    currentComments.forEach((item, index) => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td class="date-col">${item.date}</td>
+        <td class="mark-col">${item.marks}</td>
+        <td>${item.comment}</td>
+        <td class="action-col"><button class="del-btn" onclick="deleteCommentEntry(${index})">✕</button></td>
+      `;
+      logTableBody.appendChild(row);
+    });
   }
 
   function startCalibration() {
@@ -276,8 +446,7 @@
 
   function clearDrawings() {
     currentDrawings = [];
-    delete drawingsMap[currentFileId];
-    localStorage.setItem('woodpecker_drawings', JSON.stringify(drawingsMap));
+    syncToCloud();
     drawCanvas();
   }
 
@@ -285,10 +454,7 @@
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
-    };
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
   }
 
   // Pointer Events (Touch, Pencil, Mouse)
@@ -313,20 +479,14 @@
       isPointerDown = true;
       drawStart = coords;
       drawCurrent = coords;
-
-      if (activeTool === 'pen') {
-        currentStroke = [coords];
-      }
+      if (activeTool === 'pen') currentStroke = [coords];
     }
   });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!isPointerDown) return;
     drawCurrent = getCanvasCoords(e);
-
-    if (activeTool === 'pen') {
-      currentStroke.push(drawCurrent);
-    }
+    if (activeTool === 'pen') currentStroke.push(drawCurrent);
     drawCanvas();
   });
 
@@ -337,7 +497,7 @@
     if (activeTool === 'pen') {
       if (currentStroke.length > 1) {
         currentDrawings.push({ type: 'pen', points: currentStroke });
-        saveDrawings();
+        syncToCloud();
       }
       currentStroke = [];
     } else {
@@ -347,22 +507,14 @@
       let h = Math.abs(drawCurrent.y - drawStart.y);
 
       if (w < 5 && h < 5) {
-        w = 40;
-        h = 30;
-        x = drawStart.x - w / 2;
-        y = drawStart.y - h / 2;
+        w = 40; h = 30;
+        x = drawStart.x - w / 2; y = drawStart.y - h / 2;
       }
-
       currentDrawings.push({ type: activeTool, x, y, w, h });
-      saveDrawings();
+      syncToCloud();
     }
     drawCanvas();
   });
-
-  function saveDrawings() {
-    drawingsMap[currentFileId] = currentDrawings;
-    localStorage.setItem('woodpecker_drawings', JSON.stringify(drawingsMap));
-  }
 
   function getToolColors(type) {
     switch (type) {
@@ -382,14 +534,10 @@
 
     if (item.type === 'pen') {
       if (!item.points || item.points.length < 2) return;
-      ctx.lineWidth = 3;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath();
       ctx.moveTo(item.points[0].x, item.points[0].y);
-      for (let i = 1; i < item.points.length; i++) {
-        ctx.lineTo(item.points[i].x, item.points[i].y);
-      }
+      for (let i = 1; i < item.points.length; i++) ctx.lineTo(item.points[i].x, item.points[i].y);
       ctx.stroke();
     } else {
       ctx.lineWidth = 2;
@@ -401,11 +549,8 @@
   function drawCanvas() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(currentImage, 0, 0);
-
-    // Draw saved items
     currentDrawings.forEach(item => drawItem(item));
 
-    // Draw live stroke/box preview
     if (isPointerDown) {
       if (activeTool === 'pen') {
         drawItem({ type: 'pen', points: currentStroke });
@@ -418,28 +563,20 @@
       }
     }
 
-    // Masking / Calibration
     if (appState === 'calibration_1') {
-      ctx.fillStyle = '#121212';
-      ctx.fillRect(120, 0, canvas.width - 120, canvas.height);
+      ctx.fillStyle = '#121212'; ctx.fillRect(120, 0, canvas.width - 120, canvas.height);
     } else if (appState === 'calibration_2') {
-      ctx.fillStyle = '#121212';
-      ctx.fillRect(x1 + 80, 0, canvas.width - (x1 + 80), canvas.height);
-      ctx.strokeStyle = '#00ffcc';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(x1, 0); ctx.lineTo(x1, canvas.height);
-      ctx.stroke();
+      ctx.fillStyle = '#121212'; ctx.fillRect(x1 + 80, 0, canvas.width - (x1 + 80), canvas.height);
+      ctx.strokeStyle = '#00ffcc'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x1, 0); ctx.lineTo(x1, canvas.height); ctx.stroke();
     } else if (appState === 'drilling') {
       const revealX = x1 + (currentBarIndex * barWidth) - (barWidth / 2);
       if (revealX < canvas.width) {
-        ctx.fillStyle = '#121212';
-        ctx.fillRect(revealX, 0, canvas.width - revealX, canvas.height);
+        ctx.fillStyle = '#121212'; ctx.fillRect(revealX, 0, canvas.width - revealX, canvas.height);
       }
     }
   }
 
-  // Drill Navigation Functions
   function advanceBar(delta) {
     if (appState !== 'drilling' && appState !== 'revealed') return;
     appState = 'drilling';
@@ -449,9 +586,9 @@
 
   function revealChart() {
     appState = 'revealed';
-    progressMap[currentFileId] = true;
-    localStorage.setItem('woodpecker_progress', JSON.stringify(progressMap));
+    progressState = true;
     progressTag.style.display = 'inline-block';
+    syncToCloud();
     drawCanvas();
   }
 
@@ -460,8 +597,12 @@
     loadChart(currentIndex);
   }
 
-  // Keyboard Shortcuts
+  // Keyboard Shortcuts (disabled while typing in notes/marks fields)
   window.addEventListener('keydown', (e) => {
+    if (['input-marks', 'input-comment'].includes(document.activeElement.id)) {
+      if (e.key === 'Enter') saveCommentEntry();
+      return;
+    }
     if (e.code === 'KeyP') setTool('pen');
     if (e.code === 'KeyB') setTool('buy');
     if (e.code === 'KeyS') setTool('sell');
@@ -474,7 +615,6 @@
     if (e.code === 'KeyC') startCalibration();
   });
 
-  // Fetch charts on load
   fetchChartsFromGitHub();
 </script>
 
