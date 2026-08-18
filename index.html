@@ -2,8 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Woodpecker Chart Drill App</title>
+  <!-- Supabase CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -174,25 +178,25 @@
 
 <header>
   <div class="info-panel">
-    <button class="tool-btn" onclick="document.getElementById('file-input').click()">📂 Manual Add</button>
-    <input type="file" id="file-input" multiple accept="image/*" onchange="handleFileUpload(event)">
+    <button class="tool-btn" id="btn-manual-add">📂 Manual Add</button>
+    <input type="file" id="file-input" multiple accept="image/*">
     <div id="file-counter">Chart ID: -</div>
     <div id="progress-tag" class="badge" style="display:none;">REVIEWED</div>
     <div id="timer">Time: 00:00</div>
   </div>
 
   <div class="controls-panel">
-    <button id="btn-pen" class="tool-btn btn-pen" onclick="setTool('pen')">✏️ Pen</button>
-    <button id="btn-buy" class="tool-btn btn-green" onclick="setTool('buy')">Buy (B)</button>
-    <button id="btn-sell" class="tool-btn btn-red" onclick="setTool('sell')">Sell (S)</button>
-    <button id="btn-target" class="tool-btn btn-target" onclick="setTool('target')">Target (T)</button>
-    <button id="btn-stop" class="tool-btn btn-stop" onclick="setTool('stop')">Stop (L)</button>
-    <button class="tool-btn" onclick="clearDrawings()">Clear</button>
+    <button id="btn-pen" class="tool-btn btn-pen">✏️ Pen</button>
+    <button id="btn-buy" class="tool-btn btn-green">Buy (B)</button>
+    <button id="btn-sell" class="tool-btn btn-red">Sell (S)</button>
+    <button id="btn-target" class="tool-btn btn-target">Target (T)</button>
+    <button id="btn-stop" class="tool-btn btn-stop">Stop (L)</button>
+    <button id="btn-clear" class="tool-btn">Clear</button>
     
-    <button class="tool-btn btn-action" onclick="advanceBar(1)">▶ +1 Bar</button>
-    <button class="tool-btn btn-action" onclick="revealChart()">👁 Reveal (R)</button>
-    <button class="tool-btn btn-action" onclick="nextChart()">⏭ Next (N)</button>
-    <button class="tool-btn" onclick="startCalibration()">🎯 Recalibrate (C)</button>
+    <button id="btn-advance" class="tool-btn btn-action">▶ +1 Bar</button>
+    <button id="btn-reveal" class="tool-btn btn-action">👁 Reveal (R)</button>
+    <button id="btn-next" class="tool-btn btn-action">⏭ Next (N)</button>
+    <button id="btn-calib" class="tool-btn">🎯 Recalibrate (C)</button>
   </div>
 </header>
 
@@ -211,7 +215,7 @@
     <div class="log-form">
       <input type="text" id="input-marks" placeholder="Marks (e.g. 4/6)">
       <input type="text" id="input-comment" placeholder="Entry notes, mistakes, observations...">
-      <button class="tool-btn btn-action" onclick="saveCommentEntry()">Save Entry</button>
+      <button id="btn-save-log" class="tool-btn btn-action">Save Entry</button>
     </div>
 
     <div class="log-table-container">
@@ -233,30 +237,28 @@
 </div>
 
 <script>
-  // --- SUPABASE CONFIGURATION ---
-  const SUPABASE_URL = "https://nhffpyutgsifhyypszsk.supabase.co";
-  const SUPABASE_KEY = "sb_publishable_XBKldMVrjiuUfrJb47-4zg_M-J78317";
+(function() {
+  const SB_PROJECT_URL = "https://nhffpyutgsifhyypszsk.supabase.co";
+  const SB_ANON_KEY = "sb_publishable_XBKldMVrjiuUfrJb47-4zg_M-J78317";
   
-  let sbClient = null;
-  if (window.supabase && window.supabase.createClient) {
+  let db = null;
+  if (window.supabase && typeof window.supabase.createClient === 'function') {
     try {
-      sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      db = window.supabase.createClient(SB_PROJECT_URL, SB_ANON_KEY);
     } catch (e) {
-      console.warn("Supabase initialization failed:", e);
+      console.warn("Database initialization deferred:", e);
     }
   }
 
-  // --- GITHUB REPO CONFIGURATION ---
-  const GITHUB_USERNAME = "lawcheuklem-bit";
-  const REPO_NAME = "btcwoodpecker";
-  const CHARTS_FOLDER = "charts/volume1";
+  const GH_USER = "lawcheuklem-bit";
+  const GH_REPO = "btcwoodpecker";
+  const GH_FOLDER = "charts/volume1";
 
   let chartList = [];
   let currentIndex = 0;
   let currentImage = new Image();
   let currentFileId = "";
 
-  // Local storage maps
   let localDrawings = JSON.parse(localStorage.getItem('wp_drawings') || '{}');
   let localComments = JSON.parse(localStorage.getItem('wp_comments') || '{}');
   let localProgress = JSON.parse(localStorage.getItem('wp_progress') || '{}');
@@ -292,10 +294,10 @@
   async function fetchChartsFromGitHub() {
     statusOverlay.textContent = "Loading charts from GitHub...";
     statusOverlay.style.display = 'block';
-    const apiUrl = `https://api.github.com/repos/${GITHUB_USERNAME}/${REPO_NAME}/contents/${CHARTS_FOLDER}`;
+    const apiUrl = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_FOLDER}`;
     try {
       const response = await fetch(apiUrl);
-      if (!response.ok) throw new Error(`GitHub API Error: ${response.status}`);
+      if (!response.ok) throw new Error(`GitHub API HTTP ${response.status}`);
       const data = await response.json();
       
       const imageFiles = data.filter(item => item.type === 'file' && /\.(png|jpg|jpeg|webp)$/i.test(item.name));
@@ -304,7 +306,7 @@
       chartList = imageFiles.map(file => file.download_url);
       
       if (chartList.length === 0) {
-        statusOverlay.textContent = `No images in ${CHARTS_FOLDER}`;
+        statusOverlay.textContent = `No images found in /${GH_FOLDER}`;
         return;
       }
       currentIndex = 0;
@@ -362,8 +364,8 @@
     };
     currentImage.src = src;
 
-    if (sbClient) {
-      sbClient.from('chart_data').select('*').eq('file_id', currentFileId).maybeSingle()
+    if (db) {
+      db.from('chart_data').select('*').eq('file_id', currentFileId).maybeSingle()
         .then(({ data }) => {
           if (data) {
             progressState = data.reviewed || false;
@@ -373,7 +375,7 @@
             renderCommentsTable();
             drawCanvas();
           }
-        }).catch(err => console.warn("Supabase fetch skipped:", err));
+        }).catch(err => console.warn("Supabase fetch:", err));
     }
   }
 
@@ -385,9 +387,9 @@
     localStorage.setItem('wp_drawings', JSON.stringify(localDrawings));
     localStorage.setItem('wp_comments', JSON.stringify(localComments));
 
-    if (!sbClient) return;
+    if (!db) return;
     try {
-      await sbClient.from('chart_data').upsert({
+      await db.from('chart_data').upsert({
         file_id: currentFileId,
         reviewed: progressState,
         drawings: currentDrawings,
@@ -395,7 +397,7 @@
         updated_at: new Date().toISOString()
       });
     } catch (err) {
-      console.warn("Cloud sync error:", err);
+      console.warn("Sync:", err);
     }
   }
 
@@ -435,9 +437,16 @@
         <td class="date-col">${item.date}</td>
         <td class="mark-col">${item.marks}</td>
         <td>${item.comment}</td>
-        <td class="action-col"><button class="del-btn" onclick="deleteCommentEntry(${index})">✕</button></td>
+        <td class="action-col"><button class="del-btn" data-idx="${index}">✕</button></td>
       `;
       logTableBody.appendChild(row);
+    });
+
+    logTableBody.querySelectorAll('.del-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const idx = parseInt(e.target.getAttribute('data-idx'), 10);
+        deleteCommentEntry(idx);
+      });
     });
   }
 
@@ -613,6 +622,21 @@
     loadChart(currentIndex);
   }
 
+  // Button Listeners
+  document.getElementById('btn-manual-add').onclick = () => document.getElementById('file-input').click();
+  document.getElementById('file-input').onchange = handleFileUpload;
+  document.getElementById('btn-pen').onclick = () => setTool('pen');
+  document.getElementById('btn-buy').onclick = () => setTool('buy');
+  document.getElementById('btn-sell').onclick = () => setTool('sell');
+  document.getElementById('btn-target').onclick = () => setTool('target');
+  document.getElementById('btn-stop').onclick = () => setTool('stop');
+  document.getElementById('btn-clear').onclick = clearDrawings;
+  document.getElementById('btn-advance').onclick = () => advanceBar(1);
+  document.getElementById('btn-reveal').onclick = revealChart;
+  document.getElementById('btn-next').onclick = nextChart;
+  document.getElementById('btn-calib').onclick = startCalibration;
+  document.getElementById('btn-save-log').onclick = saveCommentEntry;
+
   window.addEventListener('keydown', (e) => {
     if (['input-marks', 'input-comment'].includes(document.activeElement.id)) {
       if (e.key === 'Enter') saveCommentEntry();
@@ -631,6 +655,7 @@
   });
 
   fetchChartsFromGitHub();
+})();
 </script>
 
 </body>
