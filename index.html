@@ -58,6 +58,8 @@
     .btn-stop.active { background: #3d2400; }
     .btn-action { background: #004d40; border-color: #00bfa5; color: #fff; }
     .btn-menu { background: #1f2937; border-color: #4b5563; color: #93c5fd; }
+    .btn-cut { border-color: #ffd600; color: #ffd600; }
+    .btn-cut.active { background: #3d3400; color: #ffea00; }
 
     #main-container {
       flex: 1;
@@ -174,7 +176,6 @@
     }
     #file-input { display: none; }
 
-    /* Modal Index / Menu Styles */
     #menu-modal {
       display: none;
       position: fixed;
@@ -257,6 +258,7 @@
   </div>
 
   <div class="controls-panel">
+    <button id="btn-set-title-cutoff" class="tool-btn btn-cut" title="Click chart to set title height or Shift+Wheel to adjust">✂️ Title Cut (H)</button>
     <button id="btn-pen" class="tool-btn btn-pen">✏️ Pen (D)</button>
     <button id="btn-buy" class="tool-btn btn-green">Buy (B)</button>
     <button id="btn-sell" class="tool-btn btn-red">Sell (S)</button>
@@ -346,6 +348,10 @@
   let localComments = JSON.parse(localStorage.getItem('wp_comments') || '{}');
   let localProgress = JSON.parse(localStorage.getItem('wp_progress') || '{}');
 
+  // Option 2: Configurable title mask height in px (saved across sessions)
+  let headerMaskHeight = parseInt(localStorage.getItem('wp_title_mask_height') || '115', 10);
+  let isSettingCutoff = false;
+
   let progressState = false;
   let currentDrawings = []; 
   let currentComments = [];
@@ -375,6 +381,7 @@
   const logChartTitle = document.getElementById('log-chart-title');
   const menuModal = document.getElementById('menu-modal');
   const modalGrid = document.getElementById('modal-grid');
+  const btnSetCutoff = document.getElementById('btn-set-title-cutoff');
 
   async function fetchChartsFromGitHub() {
     statusOverlay.textContent = "Loading charts from GitHub...";
@@ -569,13 +576,34 @@
     drawCanvas();
   }
 
+  function toggleSetCutoffMode() {
+    isSettingCutoff = !isSettingCutoff;
+    if (isSettingCutoff) {
+      activeTool = null;
+      updateToolUI();
+      btnSetCutoff.classList.add('active');
+      statusOverlay.textContent = "Click on the chart to set the Title Cutoff line (or Shift+Scroll)";
+      statusOverlay.style.display = 'block';
+    } else {
+      btnSetCutoff.classList.remove('active');
+      statusOverlay.style.display = 'none';
+    }
+    drawCanvas();
+  }
+
   function setTool(tool) {
+    if (isSettingCutoff) {
+      isSettingCutoff = false;
+      btnSetCutoff.classList.remove('active');
+    }
     activeTool = (activeTool === tool) ? null : tool;
     updateToolUI();
   }
 
   function updateToolUI() {
-    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tool-btn').forEach(b => {
+      if (b.id !== 'btn-set-title-cutoff') b.classList.remove('active');
+    });
     if (activeTool) {
       document.getElementById(`btn-${activeTool}`)?.classList.add('active');
     }
@@ -596,6 +624,18 @@
 
   canvas.addEventListener('pointerdown', (e) => {
     const coords = getCanvasCoords(e);
+
+    // Click-to-cut Title Cutoff mode
+    if (isSettingCutoff) {
+      headerMaskHeight = Math.max(0, Math.round(coords.y));
+      localStorage.setItem('wp_title_mask_height', headerMaskHeight);
+      isSettingCutoff = false;
+      btnSetCutoff.classList.remove('active');
+      statusOverlay.textContent = `Title mask set to ${headerMaskHeight}px!`;
+      setTimeout(() => { if (appState === 'drilling') statusOverlay.style.display = 'none'; }, 1500);
+      drawCanvas();
+      return;
+    }
 
     if (appState === 'calibration_1') {
       x1 = coords.x;
@@ -652,6 +692,22 @@
     drawCanvas();
   });
 
+  // Shift + Mouse Wheel to raise or lower title mask on the fly
+  canvas.addEventListener('wheel', (e) => {
+    if (e.shiftKey) {
+      e.preventDefault();
+      headerMaskHeight = Math.max(0, headerMaskHeight + (e.deltaY > 0 ? 5 : -5));
+      localStorage.setItem('wp_title_mask_height', headerMaskHeight);
+      statusOverlay.textContent = `Title mask: ${headerMaskHeight}px (Shift+Wheel)`;
+      statusOverlay.style.display = 'block';
+      clearTimeout(canvas._maskTimer);
+      canvas._maskTimer = setTimeout(() => {
+        if (appState === 'drilling') statusOverlay.style.display = 'none';
+      }, 1000);
+      drawCanvas();
+    }
+  }, { passive: false });
+
   function getToolColors(type) {
     switch (type) {
       case 'buy': return { stroke: '#00c853', fill: 'rgba(0, 200, 83, 0.25)' };
@@ -700,16 +756,46 @@
       }
     }
 
+    // Step 1 Calibration Mask
     if (appState === 'calibration_1') {
-      ctx.fillStyle = '#121212'; ctx.fillRect(120, 0, canvas.width - 120, canvas.height);
-    } else if (appState === 'calibration_2') {
-      ctx.fillStyle = '#121212'; ctx.fillRect(x1 + 80, 0, canvas.width - (x1 + 80), canvas.height);
-      ctx.strokeStyle = '#00ffcc'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(x1, 0); ctx.lineTo(x1, canvas.height); ctx.stroke();
-    } else if (appState === 'drilling') {
+      ctx.fillStyle = '#121212';
+      ctx.fillRect(120, 0, canvas.width - 120, canvas.height);
+    } 
+    // Step 2 Calibration Mask
+    else if (appState === 'calibration_2') {
+      ctx.fillStyle = '#121212';
+      ctx.fillRect(x1 + 80, 0, canvas.width - (x1 + 80), canvas.height);
+      ctx.strokeStyle = '#00ffcc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x1, 0);
+      ctx.lineTo(x1, canvas.height);
+      ctx.stroke();
+    } 
+    // Replay Bar Mask
+    else if (appState === 'drilling') {
       const revealX = x1 + (currentBarIndex * barWidth) - (barWidth / 2);
       if (revealX < canvas.width) {
-        ctx.fillStyle = '#121212'; ctx.fillRect(revealX, 0, canvas.width - revealX, canvas.height);
+        ctx.fillStyle = '#121212';
+        ctx.fillRect(revealX, 0, canvas.width - revealX, canvas.height);
+      }
+    }
+
+    // Option 2 Title Mask: Blocks the title top strip across the full chart width
+    if (headerMaskHeight > 0 && appState !== 'revealed') {
+      ctx.fillStyle = '#121212';
+      ctx.fillRect(0, 0, canvas.width, headerMaskHeight);
+      
+      // Guide line when in Cutoff adjustment mode
+      if (isSettingCutoff) {
+        ctx.strokeStyle = '#ffd600';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, headerMaskHeight);
+        ctx.lineTo(canvas.width, headerMaskHeight);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
   }
@@ -744,6 +830,7 @@
   }
 
   // Button Listeners
+  btnSetCutoff.onclick = toggleSetCutoffMode;
   document.getElementById('btn-open-menu').onclick = () => {
     renderMenuModal();
     menuModal.style.display = 'flex';
@@ -775,6 +862,7 @@
       if (e.key === 'Enter') saveCommentEntry();
       return;
     }
+    if (e.code === 'KeyH') toggleSetCutoffMode();
     if (e.code === 'KeyD') setTool('pen');
     if (e.code === 'KeyB') setTool('buy');
     if (e.code === 'KeyS') setTool('sell');
@@ -786,7 +874,10 @@
     if (e.code === 'ArrowLeft') { e.preventDefault(); advanceBar(-1); }
     if (e.code === 'KeyR') revealChart();
     if (e.code === 'KeyC') startCalibration();
-    if (e.code === 'Escape') menuModal.style.display = 'none';
+    if (e.code === 'Escape') {
+      menuModal.style.display = 'none';
+      if (isSettingCutoff) toggleSetCutoffMode();
+    }
   });
 
   fetchChartsFromGitHub();
